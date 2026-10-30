@@ -1,0 +1,22 @@
+{
+  "commander": "",
+  "pool_mode": "banner",
+  "rng_mode": "qrng",
+  "qrng_provider": "lfdr",
+  "animation_seconds": 5.0,
+  "observation_seconds": 10.0,
+  "game_entry_seconds": 30.0,
+  "qrng_timeout_seconds": 5.0,
+  "failure_threshold": 200,
+  "qrng_fallback": false,
+  "sound": true,
+  "initial_gold_mileage": 0,
+  "randomize_animation": true,
+  "animation_min_seconds": 5,
+  "animation_max_seconds": 9,
+  "skip_first_auto_signal": true,
+  "signal_rule": "cumulative_target",
+  "target_probability": "0.99",
+  "auto_batch_size": 10,
+  "qrng_min_request_interval_seconds": 1.0
+}
