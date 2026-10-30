@@ -9,6 +9,7 @@ from contextlib import contextmanager
 import urllib.request
 import urllib.error
 import time
+from .config import MIN_QRNG_REQUEST_INTERVAL
 
 
 class RNGError(RuntimeError):
@@ -31,7 +32,7 @@ class CSPRNG:
 class QuantumRNG:
     ENDPOINT = "https://api.quantumnumbers.anu.edu.au/?length=64&type=uint8"
 
-    def __init__(self, timeout=5, fallback=False, fetch=None, provider="anu", min_interval=1):
+    def __init__(self, timeout=5, fallback=False, fetch=None, provider="anu", min_interval=MIN_QRNG_REQUEST_INTERVAL):
         self.timeout, self.fallback = timeout, fallback
         self.provider = provider
         self.provider_name = {"anu": "ANU", "lfdr": "LfD / Quantis"}[provider]
@@ -39,7 +40,7 @@ class QuantumRNG:
         self.last_mode, self.last_warning = f"QRNG ({self.provider_name})", ""
         self._batch_active=False
         self._batch_values=[]
-        self.min_interval=min_interval
+        self.min_interval=max(MIN_QRNG_REQUEST_INTERVAL,min_interval)
         self._next_request_at=0.0
         self._request_lock=threading.Lock()
 

@@ -138,7 +138,7 @@ class Terminal:
         runtime=f'{elapsed//3600:02}:{elapsed//60%60:02}:{elapsed%60:02}'
         anchor=self.storage.observation_anchor(self.config['pool_mode'])
         anchor_label=datetime.fromisoformat(anchor['at']).astimezone(timezone(timedelta(hours=9))).strftime('%H:%M:%S KST') if anchor['at'] else '기존 기록 이어서'
-        print(f"실행 {runtime} | 구간 시작 {anchor_label} | {rng} | API 최대 1회/초")
+        print(f"실행 {runtime} | 구간 시작 {anchor_label} | {rng} | API 간격 ≥{self.config['qrng_min_request_interval_seconds']:g}초")
         goal=target_percent(self.config)+'%' if self.config['signal_rule']=='cumulative_target' else str(signal_threshold(self.config))+'회'
         cdf=cumulative_percent(streak)
         cdf_label=f'{float(cdf):.6f}%' if float(cdf)<99.9999995 else '>99.999999%'
@@ -451,7 +451,7 @@ class Terminal:
             "skip_first_auto_signal": "자동 관측 첫 신호를 연습으로 처리 true / false",
             "signal_rule": "신호 방식 cumulative_target / failure_count / planned_pulls",
             "target_probability": "목표 누적 비율(99.9999999999999% = 0.999999999999999)", "auto_batch_size": "자동 모집 인원 1 / 10",
-            "qrng_min_request_interval_seconds": "QRNG 최소 요청 간격 초(1초 이상)",
+            "qrng_min_request_interval_seconds": "QRNG 최소 요청 간격 초(1.1초 이상)",
             "planned_ten_pulls": "게임에서 예정한 10연차 횟수(0=미정)",
             "ask_plan_on_start": "시작할 때 예정 횟수 물어보기 true / false",
         }

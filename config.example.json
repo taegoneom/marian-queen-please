@@ -18,7 +18,7 @@
   "signal_rule": "cumulative_target",
   "target_probability": "0.99",
   "auto_batch_size": 10,
-  "qrng_min_request_interval_seconds": 1.0,
+  "qrng_min_request_interval_seconds": 1.1,
   "planned_ten_pulls": 12,
   "ask_plan_on_start": true
 }

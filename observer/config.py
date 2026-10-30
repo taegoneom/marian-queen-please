@@ -2,6 +2,7 @@ import json
 import math
 from pathlib import Path
 
+MIN_QRNG_REQUEST_INTERVAL = 1.1
 DEFAULTS = {
     "commander": "", "pool_mode": "banner", "rng_mode": "csprng", "qrng_provider": "lfdr",
     "animation_seconds": 1.0, "observation_seconds": 10.0,
@@ -11,7 +12,7 @@ DEFAULTS = {
     "randomize_animation": True, "animation_min_seconds": 1.0, "animation_max_seconds": 1.1,
     "skip_first_auto_signal": True,
     "signal_rule": "cumulative_target", "target_probability": "0.99", "auto_batch_size": 10,
-    "qrng_min_request_interval_seconds": 1.0,
+    "qrng_min_request_interval_seconds": MIN_QRNG_REQUEST_INTERVAL,
     "planned_ten_pulls": 12, "ask_plan_on_start": True,
 }
 
@@ -45,8 +46,8 @@ def validate(c):
         raise ValueError('신호 방식은 failure_count, cumulative_target, planned_pulls 중 하나입니다.')
     from .strategy import target_decimal
     target_decimal(c['target_probability'])
-    if type(c['qrng_min_request_interval_seconds']) not in (int,float) or not math.isfinite(c['qrng_min_request_interval_seconds']) or not 1<=c['qrng_min_request_interval_seconds']<=3600:
-        raise ValueError('QRNG 최소 요청 간격은 1~3600초입니다.')
+    if type(c['qrng_min_request_interval_seconds']) not in (int,float) or not math.isfinite(c['qrng_min_request_interval_seconds']) or not MIN_QRNG_REQUEST_INTERVAL<=c['qrng_min_request_interval_seconds']<=3600:
+        raise ValueError('QRNG 최소 요청 간격은 1.1~3600초입니다.')
     if c['auto_batch_size'] not in (1,10) or type(c['auto_batch_size']) is not int:
         raise ValueError('자동 모집 단위는 1 또는 10입니다.')
     if type(c['planned_ten_pulls']) is not int or not 0<=c['planned_ten_pulls']<=10000:
@@ -61,6 +62,9 @@ def load(path):
     c = dict(DEFAULTS)
     if path.exists():
         c.update(json.loads(path.read_text(encoding="utf-8-sig")))
+    interval=c['qrng_min_request_interval_seconds']
+    if type(interval) in (int,float) and 1<=interval<MIN_QRNG_REQUEST_INTERVAL:
+        c['qrng_min_request_interval_seconds']=MIN_QRNG_REQUEST_INTERVAL
     return validate(c)
 
 
