@@ -97,8 +97,27 @@ class Storage:
         return recovered
 
     def observation_state(self, mode):
-        row = self.db.execute("SELECT failure_streak,signal_fired FROM observations WHERE pool_mode=? ORDER BY number DESC LIMIT 1", (mode,)).fetchone()
+        anchor=self.observation_anchor(mode)
+        row = self.db.execute("SELECT failure_streak,signal_fired FROM observations WHERE pool_mode=? AND number>? ORDER BY number DESC LIMIT 1", (mode,anchor['after_number'])).fetchone()
         return (row[0], bool(row[1])) if row else (0, False)
+
+    def observation_anchor(self, mode):
+        row=self.db.execute("SELECT at,payload FROM events WHERE kind='observation_reanchored' AND subject=? ORDER BY id DESC LIMIT 1",(mode,)).fetchone()
+        return (json.loads(row['payload'])|{'at':row['at']}) if row else {'after_number':0,'at':None}
+
+    def reanchor_observation(self, mode):
+        number=self.db.execute('SELECT COALESCE(MAX(number),0) FROM observations').fetchone()[0]
+        with self.db:
+            self.event('observation_reanchored',mode,{'after_number':number,'game_total':self.game_totals()['total']})
+        return number
+
+    def game_summary(self):
+        singles=self.db.execute("SELECT COUNT(*) AS total,COALESCE(SUM(outcome='pickup'),0) AS pickup FROM real_results").fetchone()
+        batches=self.db.execute('SELECT COALESCE(SUM(pickup+other_ssr+sr+r+unknown_low),0) AS total,COALESCE(SUM(pickup),0) AS pickup FROM real_batches').fetchone()
+        total=singles['total']+batches['total'];pickup=singles['pickup']+batches['pickup']
+        interval=wilson_interval(pickup,total)
+        return {'total':total,'pickup':pickup,'percent':100*pickup/total if total else None,
+                'interval':tuple(100*x for x in interval) if interval else None}
 
     def record_observation(self, record, signal_id=None, signal_payload=None):
         fields = list(record)
@@ -110,6 +129,23 @@ class Storage:
 
     def history(self, limit=20):
         return [dict(r) for r in self.db.execute("SELECT * FROM observations ORDER BY number DESC LIMIT ?", (limit,))]
+
+    def observation_summary(self, mode, after_number=0):
+        row=self.db.execute("""SELECT COUNT(*) AS total,
+            COALESCE(SUM(character_id='marian-queen'),0) AS pickup,
+            COALESCE(SUM(rarity='SSR' AND character_id!='marian-queen'),0) AS other_ssr,
+            COALESCE(SUM(rarity='SR'),0) AS sr,
+            COALESCE(SUM(rarity='R'),0) AS r
+            FROM observations WHERE pool_mode=? AND number>?""",(mode,after_number)).fetchone()
+        result={key:int(row[key]) for key in ('total','pickup','other_ssr','sr','r')}
+        result['percentages']={key:100*result[key]/result['total'] if result['total'] else 0.0 for key in ('pickup','other_ssr','sr','r')}
+        return result
+
+    def game_totals(self):
+        single=self.db.execute('SELECT COUNT(*) AS total,COALESCE(SUM(free),0) AS free FROM real_results').fetchone()
+        batches=self.db.execute('SELECT COALESCE(SUM(pickup+other_ssr+sr+r+unknown_low),0) AS total,COALESCE(SUM(free_count),0) AS free FROM real_batches').fetchone()
+        total=single['total']+batches['total'];free=single['free']+batches['free']
+        return {'total':total,'free':free,'paid':total-free}
 
     def stats(self, mode):
         rows = self.db.execute("SELECT * FROM observations WHERE pool_mode=? ORDER BY number", (mode,)).fetchall()
@@ -143,10 +179,11 @@ class Storage:
                 else:
                     minimum+=failures;maximum_real+=failures
         actual_total = len(real)+sum(b['pickup']+b['other_ssr']+b['sr']+b['r']+b['unknown_low'] for b in batches)
+        current,_=self.observation_state(mode)
         actual_pickup = sum(r['outcome']=='pickup' for r in real)+sum(b['pickup'] for b in batches)
         interval=wilson_interval(actual_pickup,actual_total)
         return {
-            "총 관측 관측": len(rows), "SSR 관측": ssr, "픽업 관측": pickup,
+            "총 관측": len(rows), "SSR 관측": ssr, "픽업 관측": pickup,
             "현재 관측 연속 실패": current, "최대 관측 연속 실패": maximum,
             "완료된 실패 구간 분포": dict(sorted(completed.items())),
             "진행 중 실패 구간": current,

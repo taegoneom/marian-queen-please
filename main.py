@@ -70,6 +70,7 @@ def main():
                 keys=('pickup','other_ssr','low') if len(args.record_real)==3 else ('pickup','other_ssr','sr','r')
                 counts=dict(zip(keys,args.record_real))
                 number=store.record_real_batch(c['commander'],counts,args.free_count)
+                store.reanchor_observation(c['pool_mode'])
                 print(f'실제 결과 묶음 #{number} 저장: {counts}, 무료 {args.free_count}회, 골드 마일리지 {store.gold}')
                 return 0
             finally:store.close()

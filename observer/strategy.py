@@ -33,6 +33,15 @@ def at_least_one(n, p=.01):
     return -math.expm1(n * math.log1p(-p))
 
 
+def binomial_summary(n,p=.01):
+    if type(n) is not int or n<0 or not 0<p<1:raise ValueError('시행 횟수 범위 오류')
+    zero=math.exp(n*math.log1p(-p))
+    one=zero*n*p/(1-p) if n else 0.0
+    two=one*(n-1)*p/(2*(1-p)) if n>=2 else 0.0
+    return {'zero':zero,'at_least_one':max(0.0,1-zero),
+            'at_least_two':max(0.0,1-zero-one),'at_least_three':max(0.0,1-zero-one-two)}
+
+
 def required_draws(target, batch_size=10, p=.01):
     target=target_decimal(target)
     if type(batch_size) is not int or batch_size < 1:
@@ -52,6 +61,7 @@ def _required_cached(target_text,batch_size,p_text):
 
 
 def signal_threshold(config):
+    if config['signal_rule']=='planned_pulls':return config['planned_ten_pulls']*10
     if config['signal_rule']=='cumulative_target':
         return required_draws(config['target_probability'],config['auto_batch_size'])
     return config['failure_threshold']

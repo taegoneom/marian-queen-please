@@ -10,7 +10,8 @@ from .gacha import Gacha
 from .observation import Observation, State
 from .rng import build, RNGError
 from .timers import Deadline
-from .strategy import at_least_one,signal_threshold,cumulative_percent,target_percent
+from .strategy import at_least_one,signal_threshold,cumulative_percent,target_percent,binomial_summary
+from .waiting import reference as waiting_reference
 from .reports import parse_reports
 
 
@@ -91,6 +92,9 @@ class Terminal:
         self.config, self.config_path = config, config_path
         self.color = enable_color()
         self.engine = None
+        self.run_start_number=self.storage.db.execute('SELECT COALESCE(MAX(number),0) FROM observations').fetchone()[0]
+        self.run_started=time.monotonic()
+        self.run_game_start=self.storage.game_totals()['total']
 
     def ink(self, text, code="36"):
         return f"\033[{code}m{text}\033[0m" if self.color else text
@@ -110,43 +114,85 @@ class Terminal:
         session = self.storage.begin_session(self.config["commander"])
         self.engine = Observation(self.storage, self.roster, Gacha(self.roster, self.config["pool_mode"]), build(self.config), self.config, session)
 
+    def reanchor_after_report(self):
+        self.storage.reanchor_observation(self.config['pool_mode'])
+        # Keep the RNG instance and its request gate across a new time anchor.
+        if self.engine:
+            self.engine.session_id=self.storage.begin_session(self.config['commander'])
+        self.dashboard_results=[]
+        print('결과 입력 시각을 기준으로 새 관측 구간을 시작합니다 · 미등장 0회 · 누적 기록 유지',flush=True)
+
     def clear_screen(self):
         if sys.stdout.isatty():
-            if self.color:print('\033[2J\033[H',end='',flush=True)
-            elif os.name=='nt':os.system('cls')
-            else:print('\033[2J\033[H',end='',flush=True)
+            if os.name=='nt':os.system('cls')
+            print('\033[3J\033[2J\033[H',end='',flush=True)
 
     def header(self,ready=True):
-        s = self.storage.stats(self.config["pool_mode"])
-        print(self.ink("\n╔══════════════ NIKKE · OBSERVATION ══════════════╗"))
-        print(f"  COMMANDER  {self.config['commander']} 지휘관")
-        print("  SPECIAL RECRUIT    마리안 : 퀸  /  PICK UP 1.0000%")
-        if self.config['pool_mode']=='banner':
-            print('  기타 SSR 0.023810% ×126 · SR 4.777778% ×9 · R 5.888889% ×9')
-        source = {'anu': 'ANU', 'lfdr': 'LfD / Quantis · 무료 공개 API'}[self.config['qrng_provider']]
-        print(f"  난수원  {source + ' QRNG · 관측 시 요청' if self.config['rng_mode']=='qrng' else 'OS CSPRNG'}")
-        print(f"  {self.roster.label(self.config['pool_mode'])}")
-        streak=s['현재 관측 연속 실패']
-        print(f"  연속 미등장 {streak} / {signal_threshold(self.config)}  ·  총 관측 {s['총 관측 관측']}회")
-        print(f"  누적 관측 기준 {cumulative_percent(streak)}%")
-        if self.config['signal_rule']=='cumulative_target':print(f"  마리안 : 퀸 알림 목표 {target_percent(self.config)}%")
-        print(f"  GOLD MILEAGE {self.storage.gold}  ·  200장 교환은 별도 수동 기록")
-        print(self.ink("╚════════════════════════════════════════════════╝"))
-        print("[SPACE] 1회  [B] 10연차  [ENTER] 관측  [S] 통계  [L] 이력")
-        print("[A] 자동 관측  [P] 확률표  [C] 설정  [R] 실제 결과  [M] 마일리지  [Q] 종료")
+        total=self.storage.observation_summary(self.config['pool_mode'])
+        current=self.storage.observation_summary(self.config['pool_mode'],self.run_start_number)
+        streak,_=self.storage.observation_state(self.config['pool_mode'])
+        source={'anu':'ANU','lfdr':'LfD / Quantis'}[self.config['qrng_provider']]
+        rng=f'양자 난수(QRNG) · {source}' if self.config['rng_mode']=='qrng' else 'OS CSPRNG'
+        print(self.ink(f"NIKKE 대원 모집 | {self.config['commander']} 지휘관 | 마리안 : 퀸"))
+        elapsed=int(time.monotonic()-self.run_started)
+        runtime=f'{elapsed//3600:02}:{elapsed//60%60:02}:{elapsed%60:02}'
+        anchor=self.storage.observation_anchor(self.config['pool_mode'])
+        anchor_label=datetime.fromisoformat(anchor['at']).astimezone(timezone(timedelta(hours=9))).strftime('%H:%M:%S KST') if anchor['at'] else '기존 기록 이어서'
+        print(f"실행 {runtime} | 구간 시작 {anchor_label} | {rng} | API 최대 1회/초")
+        goal=target_percent(self.config)+'%' if self.config['signal_rule']=='cumulative_target' else str(signal_threshold(self.config))+'회'
+        cdf=cumulative_percent(streak)
+        cdf_label=f'{float(cdf):.6f}%' if float(cdf)<99.9999995 else '>99.999999%'
+        print(f"전체 {total['total']:,}회 | 이번 {current['total']:,}회 | 미등장 {streak}/{signal_threshold(self.config)} (구간 누적 {cdf_label}) | 목표 {goal}")
+        planned=self.config['planned_ten_pulls']
+        if planned:
+            remaining=max(0,planned*10-(self.storage.game_totals()['total']-self.run_game_start))
+            b=binomial_summary(remaining)
+            print(f"계획 10연차×{planned} · 남은 {remaining}회 이론값: 0개 {b['zero']*100:.2f}% | 1+ {b['at_least_one']*100:.2f}% | 2+ {b['at_least_two']*100:.2f}% | 3+ {b['at_least_three']*100:.2f}%")
+        else:print('게임 모집 계획: 미정 · C에서 예정 10연차 횟수를 입력할 수 있습니다.')
+        self.print_counts(total,current)
+        game=self.storage.game_totals()
+        print(f"골드 마일리지 {self.storage.gold:,}장 | 게임 기록 {game['total']:,}회 (유료 {game['paid']:,} / 무료 {game['free']:,})")
+        actual=self.storage.game_summary()
+        if actual['total']:
+            lo,hi=actual['interval'];delta=actual['percent']-1
+            actual_label=f"{actual['pickup']}/{actual['total']} = {actual['percent']:.4f}% (표기 대비 {delta:+.4f}%p, 95% 구간 {lo:.2f}~{hi:.2f}%)"
+        else:actual_label='결과 입력 대기'
+        print(f"게임 픽업 실측 {actual_label} | 다음 10회 1+ 이론 {at_least_one(10)*100:.4f}%")
+        if ready:
+            print('개별 확률: 픽업 1.000000% | 기타 SSR 0.023810%')
+            print('           SR 4.777778% | R 5.888889%')
+            print('골드 마일리지는 게임 모집 결과를 기록할 때 반영합니다.')
+        if ready:print("[SPACE] 1회  [B] 10연차  [ENTER] 관측  [S] 통계  [L] 이력")
+        if ready:print("[A] 자동 관측  [P] 확률표  [C] 설정  [R] 게임 결과  [M] 마일리지  [Q] 종료")
         if ready:print("준비 완료 · 지휘관님의 입력을 기다립니다.", flush=True)
+
+    @staticmethod
+    def print_counts(total,current):
+        import unicodedata
+        def pad(text,width):
+            used=sum(2 if unicodedata.east_asian_width(c) in ('W','F') else 1 for c in text)
+            return text+' '*max(0,width-used)
+        print(pad('분류/기준',18)+pad('전체 개수 / 비율',22)+pad('기준 대비',18)+'이번 실행 / 비율')
+        for key,label in (('pickup','마리안 : 퀸 (1%)'),('other_ssr','기타 SSR (3%)'),('sr','SR (43%)'),('r','R (53%)')):
+            all_text=f"{total[key]:,}개 / {total['percentages'][key]:.6f}%"
+            run_text=f"{current[key]:,}개 / {current['percentages'][key]:.6f}%"
+            baseline={'pickup':1,'other_ssr':3,'sr':43,'r':53}[key]
+            delta=total['percentages'][key]-baseline
+            comparison='자료 없음' if not total['total'] else ('같음' if abs(delta)<.0000005 else f"{'높음' if delta>0 else '낮음'} {delta:+.6f}%p")
+            print(pad(label,18)+pad(all_text,22)+pad(comparison,18)+run_text)
 
     def auto_dashboard(self,status):
         self.clear_screen()
         self.header(ready=False)
-        count=self.storage.db.execute('SELECT COUNT(*) FROM observations').fetchone()[0]
-        print(self.ink(f'\n전체 관측  {count:09,d} 회   |   10연차 {count//10:07,d} 묶음','97'))
-        print('[A/P] 일시정지  [R] 게임 결과 기록  [Q] 종료')
-        print(status)
-        print('─'*60)
-        print('최근 모집 결과')
+        if self.config['randomize_animation']:
+            minimum,maximum=self.config['animation_min_seconds'],self.config['animation_max_seconds']
+        else:minimum=maximum=self.config['animation_seconds']
+        ref=waiting_reference(signal_threshold(self.config),self.config['auto_batch_size'],minimum,maximum)
+        if ref:
+            print(f"첫신호 참고(0회부터/API 제외): 최단 {ref['earliest_min_seconds']:g}~{ref['earliest_max_seconds']:g}초 | 5분 초과 약 {ref['over_five_minutes']*100:.1f}%")
+        print(status+' | [R] 결과 [A/P] 정지 [Q] 종료')
         for line in getattr(self,'dashboard_results',[]):print(line)
-        print('─'*60,flush=True)
+        sys.stdout.flush()
 
     def pause(self):
         self.kb.flush()
@@ -198,6 +244,7 @@ class Terminal:
                     if self.kb.wait()=='\n':
                         number=self.storage.record_real_batch(self.config['commander'],counts,free_count,signal_id)
                         print(f'실제 묶음 #{number} 저장 · 골드 마일리지 {self.storage.gold}')
+                        self.reanchor_after_report()
                 except ValueError as exc:
                     print(f'저장하지 않았습니다: {exc}')
                 self.kb.flush()
@@ -205,6 +252,7 @@ class Terminal:
                 outcome = {"1": "pickup", "2": "other_ssr", "3": "failure"}[key]
                 number = self.storage.record_real(self.config["commander"], outcome, free, signal_id)
                 print(f"실제 결과 #{number} 저장 · 골드 마일리지 {self.storage.gold}")
+                self.reanchor_after_report()
                 free = False
                 self.kb.flush()
             elif key == "x":
@@ -237,6 +285,7 @@ class Terminal:
                     print(f'게임 결과 #{number} 저장: {counts} · 무료 {free_count}회')
                 if signal_id:
                     with self.storage.db:self.storage.event('signal_completed',signal_id)
+                self.reanchor_after_report()
                 print(f'골드 마일리지 {self.storage.gold}장 · 다음 관측으로 진행합니다.',flush=True)
                 return
             except ValueError as exc:
@@ -400,9 +449,11 @@ class Terminal:
             "randomize_animation": "모집 시간을 무작위로 선택 true / false",
             "animation_min_seconds": "무작위 모집 시간 최소 초", "animation_max_seconds": "무작위 모집 시간 최대 초",
             "skip_first_auto_signal": "자동 관측 첫 신호를 연습으로 처리 true / false",
-            "signal_rule": "신호 방식 cumulative_target / failure_count",
+            "signal_rule": "신호 방식 cumulative_target / failure_count / planned_pulls",
             "target_probability": "목표 누적 비율(99.9999999999999% = 0.999999999999999)", "auto_batch_size": "자동 모집 인원 1 / 10",
             "qrng_min_request_interval_seconds": "QRNG 최소 요청 간격 초(1초 이상)",
+            "planned_ten_pulls": "게임에서 예정한 10연차 횟수(0=미정)",
+            "ask_plan_on_start": "시작할 때 예정 횟수 물어보기 true / false",
         }
         keys = list(labels)
         for n, key in enumerate(keys, 1):
@@ -455,12 +506,14 @@ class Terminal:
         while True:
             key=self.kb.read()
             if key in ('a','p','q','r'):
-                if key=='r':self.real_results()
+                if key=='r':
+                    self.quick_report()
+                    continue
                 return key=='q'
             count=self.config['auto_batch_size']
             e.start(count)
-            self.auto_dashboard(f'{count}명 모집 · 준비 시간 {e.animation_seconds:.6f}초')
             last=None
+            recording_pause=False
             while not e.animation.expired:
                 remaining=e.animation.display()
                 if remaining!=last:
@@ -470,9 +523,13 @@ class Terminal:
                 if key in ('a','p','q','r'):
                     e.cancel('auto_paused')
                     print('\n자동 관측을 멈췄습니다.')
-                    if key=='r':self.real_results()
+                    if key=='r':
+                        self.quick_report()
+                        recording_pause=True
+                        break
                     return key=='q'
                 time.sleep(.02)
+            if recording_pause:continue
             e.prepare_observation()
             self.auto_dashboard('결과 관측 중 · 난수 응답을 기다립니다.')
             self.dashboard_results=[]
@@ -508,6 +565,24 @@ class Terminal:
                     e.advance()
                     if quit_requested:return True
 
+    def request_plan(self):
+        while True:
+            text=self.kb.line(f"게임에서 10연차를 몇 번 할 예정인가요? [Enter={self.config['planned_ten_pulls']}, 0=미정] > ")
+            try:
+                count=int(text) if text else self.config['planned_ten_pulls']
+                proposed=self.config|{'planned_ten_pulls':count}
+                if proposed['signal_rule']=='planned_pulls' and not count:proposed['signal_rule']='cumulative_target'
+                settings.validate(proposed)
+                if count:
+                    b=binomial_summary(count*10)
+                    print(f"{count*10}회 기준: 0개 {b['zero']*100:.6f}%, 1개 이상 {b['at_least_one']*100:.6f}%, 2개 이상 {b['at_least_two']*100:.6f}%, 3개 이상 {b['at_least_three']*100:.6f}%")
+                    choice=self.kb.line('이 횟수를 연속 미등장 알림 기준으로 쓸까요? [Y=사용 / Enter=기존 기준 유지] > ')
+                    if choice.lower()=='y':proposed['signal_rule']='planned_pulls'
+                settings.save(self.config_path,proposed)
+                self.config=proposed
+                return
+            except ValueError as exc:print(f'입력을 확인하세요: {exc}')
+
     def run(self, auto_start=False):
         if not sys.stdin.isatty():
             print("키 입력이 가능한 PowerShell / Windows Terminal에서 python main.py를 실행하세요.")
@@ -526,6 +601,7 @@ class Terminal:
                         break
                     except ValueError as exc:
                         print(exc)
+            if self.config['ask_plan_on_start']:self.request_plan()
             self.new_engine()
             print("NIKKE 관측 모집 · 대한민국 표준시 KST")
             try:
