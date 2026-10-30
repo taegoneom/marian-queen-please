@@ -377,7 +377,7 @@ class Terminal:
         print("\n" + self.roster.label(g.mode))
         if g.mode == "banner":
             print(self.roster.banner["warning_ko"])
-        print('픽업 1% · 기타 SSR 합계 3% · SR 합계 43% · R 합계 53%.' if g.mode=='banner' else '전체 출시 SR/R 29명에 96%를 균등 분배합니다.')
+        print('픽업 1% · 기타 SSR 합계 3% · SR 합계 43% · R 합계 53%.')
         for i, c in enumerate(g.characters):
             p = g.probabilities[c["id"]]
             status = {True: "공식 모집 포함", False: "관측 전용 대원", None: "모집 포함 미확인"}[c["banner_included"]]
@@ -391,7 +391,7 @@ class Terminal:
 
     def configure(self):
         labels = {
-            "commander": "지휘관 이름", "pool_mode": "모집 풀 banner / all", "rng_mode": "난수 csprng / qrng",
+            "commander": "지휘관 이름", "pool_mode": "모집 종류 banner(마리안 : 퀸 고정)", "rng_mode": "난수 csprng / qrng",
             "qrng_provider": "양자 난수 제공자 lfdr(무료·키 불필요) / anu(API 키 필요)",
             "animation_seconds": "애니메이션 초", "observation_seconds": "관측 제한 초",
             "game_entry_seconds": "실제 진입 제한 초", "qrng_timeout_seconds": "QRNG 제한 초",

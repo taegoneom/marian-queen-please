@@ -34,7 +34,7 @@ def validate(c):
     for k in ("qrng_fallback", "sound", "randomize_animation", "skip_first_auto_signal"):
         if type(c[k]) is not bool:
             raise ValueError(f"{k}: true 또는 false여야 합니다.")
-    if c["pool_mode"] not in ("banner", "all") or c["rng_mode"] not in ("csprng", "qrng"):
+    if c["pool_mode"] != "banner" or c["rng_mode"] not in ("csprng", "qrng"):
         raise ValueError("pool_mode / rng_mode 설정을 확인하세요.")
     if c["qrng_provider"] not in ("lfdr", "anu"):
         raise ValueError("qrng_provider는 lfdr 또는 anu여야 합니다.")

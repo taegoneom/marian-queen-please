@@ -12,4 +12,6 @@ Windows 터미널에서 무료 양자 난수로 10명씩 관측하고, 출격 �
 
 설정은 `config.example.json`에서 시작해 `config.json`에 저장됩니다. 기존 골드 마일리지는 **M**에서 입력하세요. 기록은 `runtime/`에 저장되고 Git에는 포함하지 않습니다. 누적 기준은 다음 게임 모집의 당첨률을 뜻하지 않습니다.
 
+모집 대상은 공개 표 맨 왼쪽 **[픽업] 마리안 : 퀸** 열의 145명(픽업 1·기타 SSR 126·SR 9·R 9)만 사용합니다. 전체 캐릭터 모드는 없습니다.
+
 모집 데이터 기준: 2026-10-30. [공식 업데이트](https://game.naver.com/lounge/nikke/board/detail/8369216) · [공식 확률 안내](https://game.naver.com/lounge/nikke/board/detail/8380299) · [LfD QRNG](https://www.lfdr.de/QRNG/).

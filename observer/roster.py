@@ -44,11 +44,9 @@ class Roster:
     def pool(self, mode):
         if mode == "banner":
             return [self.by_id[x] for x in self.banner["candidate_ids"]]
-        if mode == "all":
-            return list(self.characters)
         raise ValueError("알 수 없는 모집 모드")
 
     def label(self, mode):
         if mode == "banner":
             return "특수 모집 · 마리안 : 퀸"
-        return "전체 대원 관측"
+        raise ValueError('마리안 : 퀸 모집만 지원합니다.')

@@ -6,6 +6,7 @@ from math import lcm
 class Gacha:
     """Exact integer weights, immutable between independent observations."""
     def __init__(self, roster, mode="banner"):
+        if mode!='banner':raise ValueError('마리안 : 퀸 모집만 지원합니다.')
         self.mode = mode
         self.pickup_id = roster.banner["pickup_id"]
         pool = roster.pool(mode)
@@ -14,12 +15,9 @@ class Gacha:
         low = [c for c in pool if c["rarity"] in ("SR", "R")]
         if len(pickup) != 1 or not other or not low:
             raise ValueError("확률 풀 구성이 올바르지 않습니다.")
-        if mode=='banner':
-            sr=[c for c in low if c['rarity']=='SR']
-            common=[c for c in low if c['rarity']=='R']
-            groups=[(pickup,1),(other,3),(sr,43),(common,53)]
-        else:
-            groups=[(pickup,1),(other,3),(low,96)]
+        sr=[c for c in low if c['rarity']=='SR']
+        common=[c for c in low if c['rarity']=='R']
+        groups=[(pickup,1),(other,3),(sr,43),(common,53)]
         if any(not group for group,_ in groups):raise ValueError('등급별 모집 대상 누락')
         unit=lcm(*(len(group) for group,_ in groups))
         self.characters=[c for group,_ in groups for c in group]

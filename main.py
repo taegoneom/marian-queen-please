@@ -75,7 +75,7 @@ def main():
             finally:store.close()
         if args.validate:
             out = {"counts": roster.data["counts"], "data_hash": roster.version, "official_banner_pool_verified": roster.banner["pool_verified"], "modes": {}}
-            for mode in ("banner", "all"):
+            for mode in ("banner",):
                 g = Gacha(roster, mode)
                 out["modes"][mode] = {"characters": len(g.characters), "sum": str(sum(g.probabilities.values())), "pickup": str(g.probabilities[g.pickup_id]), "ssr": str(sum(g.probabilities[x['id']] for x in g.characters if x['rarity']=='SSR'))}
             print(json.dumps(out, ensure_ascii=False, indent=2))
