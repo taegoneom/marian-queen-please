@@ -6,9 +6,8 @@ from math import lcm
 class Gacha:
     """Exact integer weights, immutable between independent observations."""
     def __init__(self, roster, mode="banner"):
-        if mode!='banner':raise ValueError('마리안 : 퀸 모집만 지원합니다.')
         self.mode = mode
-        self.pickup_id = roster.banner["pickup_id"]
+        self.pickup_id = roster.banner_for(mode)["pickup_id"]
         pool = roster.pool(mode)
         pickup = [c for c in pool if c["id"] == self.pickup_id]
         other = [c for c in pool if c["rarity"] == "SSR" and c["id"] != self.pickup_id]

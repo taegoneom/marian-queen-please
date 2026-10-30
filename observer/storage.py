@@ -5,6 +5,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from .strategy import wilson_interval
+from .banners import BANNERS
 
 
 def utcnow():
@@ -49,6 +50,9 @@ class Storage:
             self.db.execute("ALTER TABLE observations ADD COLUMN observation_method TEXT NOT NULL DEFAULT 'manual'")
         if 'unknown_low' not in {r[1] for r in self.db.execute('PRAGMA table_info(real_batches)')}:
             self.db.execute('ALTER TABLE real_batches ADD COLUMN unknown_low INTEGER NOT NULL DEFAULT 0')
+        for table in ('real_results','real_batches'):
+            if 'pool_mode' not in {r[1] for r in self.db.execute(f'PRAGMA table_info({table})')}:
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN pool_mode TEXT NOT NULL DEFAULT 'banner'")
         for table in ("sessions", "events", "observations", "real_results", "real_batches", "mileage"):
             for action in ("UPDATE", "DELETE"):
                 self.db.execute(f"CREATE TRIGGER IF NOT EXISTS immutable_{table}_{action} BEFORE {action} ON {table} BEGIN SELECT RAISE(ABORT, 'append-only log'); END")
@@ -77,6 +81,10 @@ class Storage:
             if e["kind"].startswith("signal_"):
                 statuses[e["subject"]] = e["kind"][7:]
         return statuses
+
+    def signal_mode(self, signal_id):
+        row=self.db.execute("SELECT payload FROM events WHERE kind='signal_pending' AND subject=? ORDER BY id DESC LIMIT 1",(signal_id,)).fetchone()
+        return json.loads(row[0]).get('mode','banner') if row else None
 
     def recover(self):
         """Monotonic deadlines cannot survive a reboot; never revive an offer."""
@@ -108,12 +116,12 @@ class Storage:
     def reanchor_observation(self, mode):
         number=self.db.execute('SELECT COALESCE(MAX(number),0) FROM observations').fetchone()[0]
         with self.db:
-            self.event('observation_reanchored',mode,{'after_number':number,'game_total':self.game_totals()['total']})
+            self.event('observation_reanchored',mode,{'after_number':number,'game_total':self.game_totals(mode)['total']})
         return number
 
-    def game_summary(self):
-        singles=self.db.execute("SELECT COUNT(*) AS total,COALESCE(SUM(outcome='pickup'),0) AS pickup FROM real_results").fetchone()
-        batches=self.db.execute('SELECT COALESCE(SUM(pickup+other_ssr+sr+r+unknown_low),0) AS total,COALESCE(SUM(pickup),0) AS pickup FROM real_batches').fetchone()
+    def game_summary(self, mode=None):
+        singles=self.db.execute("SELECT COUNT(*) AS total,COALESCE(SUM(outcome='pickup'),0) AS pickup FROM real_results WHERE (? IS NULL OR pool_mode=?)",(mode,mode)).fetchone()
+        batches=self.db.execute('SELECT COALESCE(SUM(pickup+other_ssr+sr+r+unknown_low),0) AS total,COALESCE(SUM(pickup),0) AS pickup FROM real_batches WHERE (? IS NULL OR pool_mode=?)',(mode,mode)).fetchone()
         total=singles['total']+batches['total'];pickup=singles['pickup']+batches['pickup']
         interval=wilson_interval(pickup,total)
         return {'total':total,'pickup':pickup,'percent':100*pickup/total if total else None,
@@ -127,23 +135,23 @@ class Storage:
                 self.event("signal_pending", signal_id, signal_payload)
         return result.lastrowid
 
-    def history(self, limit=20):
-        return [dict(r) for r in self.db.execute("SELECT * FROM observations ORDER BY number DESC LIMIT ?", (limit,))]
+    def history(self, limit=20, mode=None):
+        return [dict(r) for r in self.db.execute("SELECT * FROM observations WHERE (? IS NULL OR pool_mode=?) ORDER BY number DESC LIMIT ?", (mode,mode,limit))]
 
     def observation_summary(self, mode, after_number=0):
         row=self.db.execute("""SELECT COUNT(*) AS total,
-            COALESCE(SUM(character_id='marian-queen'),0) AS pickup,
-            COALESCE(SUM(rarity='SSR' AND character_id!='marian-queen'),0) AS other_ssr,
+            COALESCE(SUM(character_id=?),0) AS pickup,
+            COALESCE(SUM(rarity='SSR' AND character_id!=?),0) AS other_ssr,
             COALESCE(SUM(rarity='SR'),0) AS sr,
             COALESCE(SUM(rarity='R'),0) AS r
-            FROM observations WHERE pool_mode=? AND number>?""",(mode,after_number)).fetchone()
+            FROM observations WHERE pool_mode=? AND number>?""",(BANNERS[mode]['pickup_id'],BANNERS[mode]['pickup_id'],mode,after_number)).fetchone()
         result={key:int(row[key]) for key in ('total','pickup','other_ssr','sr','r')}
         result['percentages']={key:100*result[key]/result['total'] if result['total'] else 0.0 for key in ('pickup','other_ssr','sr','r')}
         return result
 
-    def game_totals(self):
-        single=self.db.execute('SELECT COUNT(*) AS total,COALESCE(SUM(free),0) AS free FROM real_results').fetchone()
-        batches=self.db.execute('SELECT COALESCE(SUM(pickup+other_ssr+sr+r+unknown_low),0) AS total,COALESCE(SUM(free_count),0) AS free FROM real_batches').fetchone()
+    def game_totals(self, mode=None):
+        single=self.db.execute('SELECT COUNT(*) AS total,COALESCE(SUM(free),0) AS free FROM real_results WHERE (? IS NULL OR pool_mode=?)',(mode,mode)).fetchone()
+        batches=self.db.execute('SELECT COALESCE(SUM(pickup+other_ssr+sr+r+unknown_low),0) AS total,COALESCE(SUM(free_count),0) AS free FROM real_batches WHERE (? IS NULL OR pool_mode=?)',(mode,mode)).fetchone()
         total=single['total']+batches['total'];free=single['free']+batches['free']
         return {'total':total,'free':free,'paid':total-free}
 
@@ -158,9 +166,9 @@ class Storage:
                 completed[current] += 1
             current = r["failure_streak"]
             maximum = max(maximum, current)
-        real = self.db.execute("SELECT * FROM real_results ORDER BY number").fetchall()
+        real = self.db.execute("SELECT * FROM real_results WHERE pool_mode=? ORDER BY number",(mode,)).fetchall()
         events = self.events()
-        batches = self.db.execute("SELECT * FROM real_batches ORDER BY number").fetchall()
+        batches = self.db.execute("SELECT * FROM real_batches WHERE pool_mode=? ORDER BY number",(mode,)).fetchall()
         recorded_ids = {e['payload']['number'] for e in events if e['kind']=='real_result_recorded'}
         minimum = maximum_real = 0
         # Older versions' individual records precede new event-ordered entries.
@@ -169,6 +177,7 @@ class Storage:
                 minimum = 0 if r['outcome']=='pickup' else minimum+1
                 maximum_real = 0 if r['outcome']=='pickup' else maximum_real+1
         for e in events:
+            if e['kind'] in ('real_result_recorded','real_batch_recorded') and e['payload'].get('pool_mode','banner')!=mode:continue
             if e['kind']=='real_result_recorded':
                 minimum = 0 if e['payload']['outcome']=='pickup' else minimum+1
                 maximum_real = 0 if e['payload']['outcome']=='pickup' else maximum_real+1
@@ -212,26 +221,30 @@ class Storage:
         with self.db:
             self._mileage(value - self.gold, "manual_balance_correction")
 
-    def exchange(self):
+    def exchange(self, mode='banner'):
+        name=BANNERS[mode]['name']
         if self.gold < 200:
             raise ValueError("200장이 필요합니다.")
         with self.db:
-            self._mileage(-200, "manual_marian_exchange")
-            self.event("real_exchange", payload={"character": "마리안 : 퀸", "tickets": 200})
+            self._mileage(-200, "manual_pickup_exchange")
+            self.event("real_exchange", payload={"character": name, "pool_mode":mode, "tickets": 200})
 
-    def record_real(self, commander, outcome, free=False, signal_id=None):
+    def record_real(self, commander, outcome, free=False, signal_id=None, mode='banner'):
+        if mode not in BANNERS:raise ValueError('지원하지 않는 모집입니다.')
         if outcome not in ("pickup", "other_ssr", "failure"):
             raise ValueError("실제 결과를 직접 선택하세요.")
         if signal_id and self.signal_statuses().get(signal_id) != "started":
             raise ValueError("시작 확인된 신호가 아닙니다.")
+        if signal_id and self.signal_mode(signal_id)!=mode:raise ValueError('선택한 픽업의 신호가 아닙니다.')
         with self.db:
-            r = self.db.execute("INSERT INTO real_results(at,commander,signal_id,outcome,free) VALUES(?,?,?,?,?)", (utcnow(), commander, signal_id, outcome, int(free)))
+            r = self.db.execute("INSERT INTO real_results(at,commander,signal_id,outcome,free,pool_mode) VALUES(?,?,?,?,?,?)", (utcnow(), commander, signal_id, outcome, int(free),mode))
             if not free:
                 self._mileage(1, "recorded_paid_special_recruit", r.lastrowid)
-            self.event('real_result_recorded', signal_id, {'number':r.lastrowid,'outcome':outcome,'free':free})
+            self.event('real_result_recorded', signal_id, {'number':r.lastrowid,'outcome':outcome,'free':free,'pool_mode':mode})
         return r.lastrowid
 
-    def record_real_batch(self, commander, counts, free_count=0, signal_id=None):
+    def record_real_batch(self, commander, counts, free_count=0, signal_id=None, mode='banner'):
+        if mode not in BANNERS:raise ValueError('지원하지 않는 모집입니다.')
         if set(counts) not in ({'pickup','other_ssr','sr','r'},{'pickup','other_ssr','low'},{'pickup','other_ssr','sr','r','low'}):
             raise ValueError('결과 항목을 확인하세요.')
         counts={'sr':0,'r':0,'low':0}|counts
@@ -242,11 +255,12 @@ class Storage:
             raise ValueError('총 모집 1~10000회, 무료 횟수는 총 횟수 이하여야 합니다.')
         if signal_id and self.signal_statuses().get(signal_id)!='started':
             raise ValueError('시작 확인된 신호가 아닙니다.')
+        if signal_id and self.signal_mode(signal_id)!=mode:raise ValueError('선택한 픽업의 신호가 아닙니다.')
         with self.db:
-            result=self.db.execute('INSERT INTO real_batches(at,commander,signal_id,pickup,other_ssr,sr,r,free_count,unknown_low) VALUES(?,?,?,?,?,?,?,?,?)',
-                (utcnow(),commander,signal_id,counts['pickup'],counts['other_ssr'],counts['sr'],counts['r'],free_count,counts['low']))
+            result=self.db.execute('INSERT INTO real_batches(at,commander,signal_id,pickup,other_ssr,sr,r,free_count,unknown_low,pool_mode) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                (utcnow(),commander,signal_id,counts['pickup'],counts['other_ssr'],counts['sr'],counts['r'],free_count,counts['low'],mode))
             self._mileage(total-free_count, f'recorded_real_batch:{result.lastrowid}')
-            self.event('real_batch_recorded',signal_id,{'number':result.lastrowid,'counts':counts,'free_count':free_count,'within_batch_order':'not_supplied'})
+            self.event('real_batch_recorded',signal_id,{'number':result.lastrowid,'counts':counts,'free_count':free_count,'within_batch_order':'not_supplied','pool_mode':mode})
         return result.lastrowid
 
     def export(self, path):

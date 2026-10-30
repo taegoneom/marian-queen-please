@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "as_of": "2026-10-30",
-  "data_version": "2026-10-30-official-column-only",
-  "verification_status": "official_marian_queen_leftmost_column_only",
+  "data_version": "2026-10-30-official-two-pickup-columns",
+  "verification_status": "official_marian_queen_and_scarlet_goddeath_columns",
   "counts": {
-    "SSR": 127,
+    "SSR": 128,
     "SR": 9,
     "R": 9
   },
@@ -3349,6 +3349,30 @@
       "last_verified": "2026-10-30",
       "name_verification": "cross_database_mapping",
       "notes": []
+    },
+    {
+      "id": "scarlet-goddeath",
+      "game_id": null,
+      "name_ko": "홍련 : 신살",
+      "name_en": "Scarlet: Goddeath",
+      "rarity": "SSR",
+      "release_date": "2026-11-05",
+      "release_date_verification": "official_scheduled",
+      "banner_included": true,
+      "banner_verification": "official_probability_sheet",
+      "limited": false,
+      "collaboration": false,
+      "acquisition": "ordinary_candidate",
+      "sources": [
+        "https://game.naver.com/lounge/nikke/board/detail/8369216",
+        "https://game.naver.com/lounge/nikke/board/detail/8380299",
+        "https://docs.google.com/spreadsheets/d/e/2PACX-1vRHwNzbGkBbJ_HCKbb1OoHjDPYLJhRVuDFKa2t11k1_Ruz6sWmQ0WFWkk7sppE_uwPlJDYcQAJc_Xd7/pubhtml?gid=647451479"
+      ],
+      "last_verified": "2026-10-30",
+      "name_verification": "official_probability_sheet",
+      "notes": [
+        "공식 공개된 예정 픽업 열 기준. 모집 시작 2026-11-05 05:00 KST."
+      ]
     }
   ],
   "excluded_unreleased": []

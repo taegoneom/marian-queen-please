@@ -8,7 +8,8 @@ from fractions import Fraction
 from . import config as settings
 from .gacha import Gacha
 from .observation import Observation, State
-from .rng import build, RNGError
+from .rng import build, RNGError, QuantumRNG
+from .banners import BANNERS
 from .timers import Deadline
 from .strategy import at_least_one,signal_threshold,cumulative_percent,target_percent,binomial_summary
 from .waiting import reference as waiting_reference
@@ -94,7 +95,11 @@ class Terminal:
         self.engine = None
         self.run_start_number=self.storage.db.execute('SELECT COALESCE(MAX(number),0) FROM observations').fetchone()[0]
         self.run_started=time.monotonic()
-        self.run_game_start=self.storage.game_totals()['total']
+        self.run_game_starts={mode:self.storage.game_totals(mode)['total'] for mode in BANNERS}
+
+    @property
+    def pickup_name(self):
+        return BANNERS[self.config['pool_mode']]['name']
 
     def ink(self, text, code="36"):
         return f"\033[{code}m{text}\033[0m" if self.color else text
@@ -112,7 +117,12 @@ class Terminal:
 
     def new_engine(self):
         session = self.storage.begin_session(self.config["commander"])
-        self.engine = Observation(self.storage, self.roster, Gacha(self.roster, self.config["pool_mode"]), build(self.config), self.config, session)
+        rng=build(self.config)
+        if self.engine and isinstance(rng,QuantumRNG) and isinstance(self.engine.rng,QuantumRNG):
+            rng._next_request_at=self.engine.rng._next_request_at
+            rng._request_lock=self.engine.rng._request_lock
+        self.engine = Observation(self.storage, self.roster, Gacha(self.roster, self.config["pool_mode"]), rng, self.config, session)
+        self.dashboard_results=[]
 
     def reanchor_after_report(self):
         self.storage.reanchor_observation(self.config['pool_mode'])
@@ -133,7 +143,7 @@ class Terminal:
         streak,_=self.storage.observation_state(self.config['pool_mode'])
         source={'anu':'ANU','lfdr':'LfD / Quantis'}[self.config['qrng_provider']]
         rng=f'양자 난수(QRNG) · {source}' if self.config['rng_mode']=='qrng' else 'OS CSPRNG'
-        print(self.ink(f"NIKKE 대원 모집 | {self.config['commander']} 지휘관 | 마리안 : 퀸"))
+        print(self.ink(f"NIKKE 대원 모집 | {self.config['commander']} 지휘관 | {self.pickup_name}"))
         elapsed=int(time.monotonic()-self.run_started)
         runtime=f'{elapsed//3600:02}:{elapsed//60%60:02}:{elapsed%60:02}'
         anchor=self.storage.observation_anchor(self.config['pool_mode'])
@@ -145,14 +155,14 @@ class Terminal:
         print(f"전체 {total['total']:,}회 | 이번 {current['total']:,}회 | 미등장 {streak}/{signal_threshold(self.config)} (구간 누적 {cdf_label}) | 목표 {goal}")
         planned=self.config['planned_ten_pulls']
         if planned:
-            remaining=max(0,planned*10-(self.storage.game_totals()['total']-self.run_game_start))
+            remaining=max(0,planned*10-(self.storage.game_totals(self.config['pool_mode'])['total']-self.run_game_starts[self.config['pool_mode']]))
             b=binomial_summary(remaining)
             print(f"계획 10연차×{planned} · 남은 {remaining}회 이론값: 0개 {b['zero']*100:.2f}% | 1+ {b['at_least_one']*100:.2f}% | 2+ {b['at_least_two']*100:.2f}% | 3+ {b['at_least_three']*100:.2f}%")
         else:print('게임 모집 계획: 미정 · C에서 예정 10연차 횟수를 입력할 수 있습니다.')
         self.print_counts(total,current)
-        game=self.storage.game_totals()
+        game=self.storage.game_totals(self.config['pool_mode'])
         print(f"골드 마일리지 {self.storage.gold:,}장 | 게임 기록 {game['total']:,}회 (유료 {game['paid']:,} / 무료 {game['free']:,})")
-        actual=self.storage.game_summary()
+        actual=self.storage.game_summary(self.config['pool_mode'])
         if actual['total']:
             lo,hi=actual['interval'];delta=actual['percent']-1
             actual_label=f"{actual['pickup']}/{actual['total']} = {actual['percent']:.4f}% (표기 대비 {delta:+.4f}%p, 95% 구간 {lo:.2f}~{hi:.2f}%)"
@@ -166,14 +176,13 @@ class Terminal:
         if ready:print("[A] 자동 관측  [P] 확률표  [C] 설정  [R] 게임 결과  [M] 마일리지  [Q] 종료")
         if ready:print("준비 완료 · 지휘관님의 입력을 기다립니다.", flush=True)
 
-    @staticmethod
-    def print_counts(total,current):
+    def print_counts(self,total,current):
         import unicodedata
         def pad(text,width):
             used=sum(2 if unicodedata.east_asian_width(c) in ('W','F') else 1 for c in text)
             return text+' '*max(0,width-used)
         print(pad('분류/기준',18)+pad('전체 개수 / 비율',22)+pad('기준 대비',18)+'이번 실행 / 비율')
-        for key,label in (('pickup','마리안 : 퀸 (1%)'),('other_ssr','기타 SSR (3%)'),('sr','SR (43%)'),('r','R (53%)')):
+        for key,label in (('pickup',self.pickup_name+' (1%)'),('other_ssr','기타 SSR (3%)'),('sr','SR (43%)'),('r','R (53%)')):
             all_text=f"{total[key]:,}개 / {total['percentages'][key]:.6f}%"
             run_text=f"{current[key]:,}개 / {current['percentages'][key]:.6f}%"
             baseline={'pickup':1,'other_ssr':3,'sr':43,'r':53}[key]
@@ -203,7 +212,7 @@ class Terminal:
     def real_results(self, signal_id=None):
         print(self.ink("\n실제 니케 모집 · 직접 확인한 결과만 기록", "35"))
         if signal_id is None:
-            pending = [sid for sid, state in self.storage.signal_statuses().items() if state == "started"]
+            pending = [sid for sid, state in self.storage.signal_statuses().items() if state == "started" and self.storage.signal_mode(sid)==self.config['pool_mode']]
             if pending:
                 print("시작 확인 후 기록을 마치지 않은 신호:")
                 for i, sid in enumerate(pending, 1):
@@ -235,14 +244,14 @@ class Terminal:
                 self.quick_report(signal_id)
             elif key == 'b':
                 try:
-                    labels={'pickup':'픽업 마리안 : 퀸','other_ssr':'기타 SSR','sr':'SR(레어)','r':'R(커먼)'}
+                    labels={'pickup':'픽업 '+self.pickup_name,'other_ssr':'기타 SSR','sr':'SR(레어)','r':'R(커먼)'}
                     counts={k:int(self.kb.line(f'{label} 획득 수 [빈칸=0] > ') or '0') for k,label in labels.items()}
                     free_count=int(self.kb.line('이 모집 중 무료 모집 횟수 [빈칸=0] > ') or '0')
                     print(f"실제 모집 {sum(counts.values())}회: {counts} · 무료 {free_count}회")
                     print('[ENTER] 이 수량으로 기록 / 다른 키: 취소',flush=True)
                     self.kb.flush()
                     if self.kb.wait()=='\n':
-                        number=self.storage.record_real_batch(self.config['commander'],counts,free_count,signal_id)
+                        number=self.storage.record_real_batch(self.config['commander'],counts,free_count,signal_id,self.config['pool_mode'])
                         print(f'실제 묶음 #{number} 저장 · 골드 마일리지 {self.storage.gold}')
                         self.reanchor_after_report()
                 except ValueError as exc:
@@ -250,7 +259,7 @@ class Terminal:
                 self.kb.flush()
             elif key in ("1", "2", "3"):
                 outcome = {"1": "pickup", "2": "other_ssr", "3": "failure"}[key]
-                number = self.storage.record_real(self.config["commander"], outcome, free, signal_id)
+                number = self.storage.record_real(self.config["commander"], outcome, free, signal_id,self.config['pool_mode'])
                 print(f"실제 결과 #{number} 저장 · 골드 마일리지 {self.storage.gold}")
                 self.reanchor_after_report()
                 free = False
@@ -266,7 +275,7 @@ class Terminal:
                 return
 
     def quick_report(self,signal_id=None):
-        print('\n게임 모집 결과 입력 · 입력 중에는 관측을 기다립니다.')
+        print(f'\n{self.pickup_name} 게임 모집 결과 입력 · 입력 중에는 관측을 기다립니다.')
         print('픽업 / 기타 SSR / 나머지 순서: 0 0 10, 1 0 9, 0 1 9')
         print('SR/R 구분은 숫자 4개: 픽업 기타SSR SR R. 여러 10연차는 /로 구분.')
         while True:
@@ -281,7 +290,7 @@ class Terminal:
                 if len(frees)!=len(groups) or any(not 0<=x<=10 for x in frees):
                     raise ValueError('각 10연차의 무료 횟수를 순서대로 입력하세요. 기본값은 0입니다.')
                 for counts,free_count in zip(groups,frees):
-                    number=self.storage.record_real_batch(self.config['commander'],counts,free_count,signal_id)
+                    number=self.storage.record_real_batch(self.config['commander'],counts,free_count,signal_id,self.config['pool_mode'])
                     print(f'게임 결과 #{number} 저장: {counts} · 무료 {free_count}회')
                 if signal_id:
                     with self.storage.db:self.storage.event('signal_completed',signal_id)
@@ -299,7 +308,7 @@ class Terminal:
         self.beep(2)
         ordinal = sum(e['kind']=='signal_pending' for e in self.storage.events())
         print(self.ink(f"\n[관측 신호 #{ordinal} 발생] {self.config['commander']} 지휘관님", "93"))
-        print(f"마리안 : 퀸 {streak}회 연속 미등장 · 누적 관측 기준 {cumulative_percent(streak)}%")
+        print(f"{self.pickup_name} {streak}회 연속 미등장 · 누적 관측 기준 {cumulative_percent(streak)}%")
         print(f"지금부터 {self.config['game_entry_seconds']:g}초 안에 폰에서 10명 모집 버튼을 누르고 개봉하세요.")
         print("[D / ENTER] 뽑았어요  [N] 안 뽑았어요 · 다음 관측  [Q] 중지", flush=True)
         self.kb.flush()
@@ -411,7 +420,7 @@ class Terminal:
         self.pause()
 
     def history(self):
-        for r in reversed(self.storage.history(30)):
+        for r in reversed(self.storage.history(30,self.config['pool_mode'])):
             local=datetime.fromisoformat(r['revealed_at']).astimezone(timezone(timedelta(hours=9))).strftime('%Y-%m-%d %H:%M:%S KST')
             print(f"#{r['number']:5} {local}  {r['commander']}  {r['rarity']} {r['name_ko']} · 미등장 {r['failure_streak']} · {r['rng_mode']}")
         events = self.storage.events()[-10:]
@@ -424,8 +433,7 @@ class Terminal:
     def probabilities(self):
         g = self.engine.gacha
         print("\n" + self.roster.label(g.mode))
-        if g.mode == "banner":
-            print(self.roster.banner["warning_ko"])
+        print(self.roster.banner_for(g.mode)["warning_ko"])
         print('픽업 1% · 기타 SSR 합계 3% · SR 합계 43% · R 합계 53%.')
         for i, c in enumerate(g.characters):
             p = g.probabilities[c["id"]]
@@ -440,7 +448,7 @@ class Terminal:
 
     def configure(self):
         labels = {
-            "commander": "지휘관 이름", "pool_mode": "모집 종류 banner(마리안 : 퀸 고정)", "rng_mode": "난수 csprng / qrng",
+            "commander": "지휘관 이름", "pool_mode": "픽업 종류(번호로 선택)", "rng_mode": "난수 csprng / qrng",
             "qrng_provider": "양자 난수 제공자 lfdr(무료·키 불필요) / anu(API 키 필요)",
             "animation_seconds": "애니메이션 초", "observation_seconds": "관측 제한 초",
             "game_entry_seconds": "실제 진입 제한 초", "qrng_timeout_seconds": "QRNG 제한 초",
@@ -466,6 +474,11 @@ class Terminal:
             if not 1 <= index <= len(keys):
                 raise ValueError("항목 번호를 확인하세요.")
             key = keys[index - 1]
+            if key=='pool_mode':
+                self.request_pickup()
+                self.new_engine()
+                print('픽업 설정을 저장했습니다.')
+                return
             text = self.kb.line(f"{labels[key]} 새 값 > ")
             value = json.loads(text) if type(settings.DEFAULTS[key]) is not str else text
             proposed = self.config | {key: value}
@@ -491,9 +504,9 @@ class Terminal:
                 value = int(self.kb.line("실제 게임에서 확인한 현재 보유량 > "))
                 self.storage.set_gold(value)
             elif key == "e":
-                text = self.kb.line("게임에서 마리안 : 퀸 교환을 완료했다면 '교환완료' 입력 > ")
+                text = self.kb.line(f"게임에서 {self.pickup_name} 교환을 완료했다면 '교환완료' 입력 > ")
                 if text == "교환완료":
-                    self.storage.exchange()
+                    self.storage.exchange(self.config['pool_mode'])
                     print("실제 교환을 기록했습니다. 픽업 당첨 통계에는 합산하지 않습니다.")
         except ValueError as exc:
             print(f"변경 없음: {exc}")
@@ -551,19 +564,37 @@ class Terminal:
                     color={'SSR':'93','SR':'95','R':'94'}[result['rarity']]
                     self.dashboard_results.append(self.ink(f"#{result['number']:07} [{e.position:02}/{count:02}] {result['rarity']} — {result['name_ko']} ({float(Fraction(result['probability']))*100:.6f}%)",color))
                     if e.pending==0:
-                        self.auto_dashboard(f"관측 완료 · 마리안 : 퀸 연속 미등장 {result['failure_streak']} / {signal_threshold(self.config)}")
+                        self.auto_dashboard(f"관측 완료 · {self.pickup_name} 연속 미등장 {result['failure_streak']} / {signal_threshold(self.config)}")
                     quit_requested=False
                     if e.signal and e.signal.refresh()=='pending':
-                        rehearsed=any(x['kind']=='auto_rehearsal_done' for x in self.storage.events())
+                        rehearsed=any(x['kind']=='auto_rehearsal_done' and x['payload'].get('mode','banner')==self.config['pool_mode'] for x in self.storage.events())
                         if self.config['skip_first_auto_signal'] and not rehearsed:
                             e.signal.rehearse()
-                            with self.storage.db:self.storage.event('auto_rehearsal_done',e.signal.id)
+                            with self.storage.db:self.storage.event('auto_rehearsal_done',e.signal.id,{'mode':self.config['pool_mode']})
                             self.beep()
                             print(self.ink('[첫 알림 · 연습] 다음 출격 신호부터 폰에서 모집하시면 됩니다.','93'),flush=True)
                         else:
                             quit_requested=bool(self.handle_signal(automatic=True))
                     e.advance()
                     if quit_requested:return True
+
+    def request_pickup(self):
+        modes=list(BANNERS)
+        default=modes.index(self.config['pool_mode'])+1
+        print('\n무슨 픽업이에요?')
+        for number,mode in enumerate(modes,1):
+            print(f"  {number}. {BANNERS[mode]['name']}")
+        while True:
+            text=self.kb.line(f'번호 선택 [Enter={default}] > ')
+            try:
+                number=int(text) if text else default
+                if not 1<=number<=len(modes):raise ValueError
+                proposed=self.config|{'pool_mode':modes[number-1]}
+                settings.save(self.config_path,proposed)
+                self.config=proposed
+                print('선택한 픽업: '+self.pickup_name)
+                return
+            except ValueError:print('목록에 있는 번호를 입력하세요.')
 
     def request_plan(self):
         while True:
@@ -601,6 +632,7 @@ class Terminal:
                         break
                     except ValueError as exc:
                         print(exc)
+            self.request_pickup()
             if self.config['ask_plan_on_start']:self.request_plan()
             self.new_engine()
             print("NIKKE 관측 모집 · 대한민국 표준시 KST")

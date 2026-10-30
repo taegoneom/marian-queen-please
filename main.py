@@ -9,6 +9,7 @@ from observer.gacha import Gacha
 from observer.roster import Roster
 from observer.storage import Storage
 from observer.terminal import Terminal
+from observer.banners import BANNERS
 
 COMMANDER_NAME = "여기에지휘관닉네임을입력해주세요"
 
@@ -69,14 +70,14 @@ def main():
                 if len(args.record_real) not in (3,4):raise ValueError('수량을 3개 또는 4개 입력하세요.')
                 keys=('pickup','other_ssr','low') if len(args.record_real)==3 else ('pickup','other_ssr','sr','r')
                 counts=dict(zip(keys,args.record_real))
-                number=store.record_real_batch(c['commander'],counts,args.free_count)
+                number=store.record_real_batch(c['commander'],counts,args.free_count,mode=c['pool_mode'])
                 store.reanchor_observation(c['pool_mode'])
                 print(f'실제 결과 묶음 #{number} 저장: {counts}, 무료 {args.free_count}회, 골드 마일리지 {store.gold}')
                 return 0
             finally:store.close()
         if args.validate:
-            out = {"counts": roster.data["counts"], "data_hash": roster.version, "official_banner_pool_verified": roster.banner["pool_verified"], "modes": {}}
-            for mode in ("banner",):
+            out = {"counts": roster.data["counts"], "data_hash": roster.version, "official_banner_pool_verified": all(b['pool_verified'] for b in roster.banners.values()), "modes": {}}
+            for mode in BANNERS:
                 g = Gacha(roster, mode)
                 out["modes"][mode] = {"characters": len(g.characters), "sum": str(sum(g.probabilities.values())), "pickup": str(g.probabilities[g.pickup_id]), "ssr": str(sum(g.probabilities[x['id']] for x in g.characters if x['rarity']=='SSR'))}
             print(json.dumps(out, ensure_ascii=False, indent=2))
